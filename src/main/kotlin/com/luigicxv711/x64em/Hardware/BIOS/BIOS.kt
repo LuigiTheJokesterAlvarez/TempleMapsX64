@@ -2,8 +2,7 @@ package com.luigicxv711.x64em.Hardware.BIOS
 
 import com.luigicxv711.x64em.Hardware.HardwareComp
 
-class BIOS : HardwareComp() {
-    var path = "C:\\TestBios\\ibm.bin"
+class BIOS(var path: String = "C:\\TestBios\\ibm.bin") : HardwareComp() {
     lateinit var rom: ByteArray
     override fun init() {
         rom = java.io.File(this.path).readBytes()

@@ -21,7 +21,7 @@ import java.util.Arrays;
 
 
 
-public final class BochsCMOSMap extends CMOSMap {
+public final class BochsCMOSMap extends Hardware.CMOS.CMOSMap {
     
     @Override
     public void initDefaults() {
