@@ -1,40 +1,88 @@
 package com.luigicxv711.x64em.Hardware
 
 import com.luigicxv711.x64em.Hardware.BIOS.BIOS
-import com.luigicxv711.x64em.Hardware.IntelCore2.CPU
+import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
+import com.luigicxv711.x64em.Hardware.CPU.CPU
+import com.luigicxv711.x64em.Hardware.Keyboard.Keyboard
 import com.luigicxv711.x64em.Hardware.RAM.ATSysRAM
+import java.awt.*
+import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
+import javax.swing.*
 
-fun main() {
-    var cpu = CPU();
-    var bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\boot.bin");
-    var ram = ATSysRAM(16)
-    cpu.init()
-    bios.init()
-    ram.init()
+fun loadPal(): IntArray {
+    val pal = IntArray(256)
+    var i = 0
+    val img = ImageIO.read(File("C:\\Users\\luisa\\Downloads\\stickers\\vgapal.png"))
+    for (y in 0 until img.height) {
+        for (x in 0 until img.width) {
+            val col = img.getRGB(x, y)
+            pal[i++] = col and 0xFFFFFF
+        }
+    }
+    return pal
+}
 
-    cpu.wireWith(bios)
-    cpu.wireWith(ram)
-    var cycles = 0L
-    var cyclesGOAL = 10L
-    val startTime = System.nanoTime()
-    var instructionsExecuted = 0L
 
-    while (instructionsExecuted < 100_000_000) {
-        if (!cpu.halted) {
-            cpu.tick()
-            instructionsExecuted++
-        } else {
-            // If halted, we don't count instructions,
-            // but we might want to break or wait for an interrupt.
-            break
+fun showVGA(gpu: GenericVGAGPU) {
+    val width = GenericVGAGPU.WIDTH
+    val height = GenericVGAGPU.HEIGHT
+
+    // Create a BufferedImage to hold the VGA pixels
+    val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+
+    // Map your 8-bit VGA colors to RGB (simple palette for now)
+    val palette = loadPal()
+
+    // Fill the image from framebuffer
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val colorIndex = gpu.frameBuffer[y * width + x].toInt() and 0xFF
+            image.setRGB(x, y, palette[colorIndex])
         }
     }
 
-    println(cpu.getRAXcomponents())
-    println(cpu.halted)
-    val endTime = System.nanoTime()
-    val durationSeconds = (endTime - startTime) / 1_000_000_000.0
-    val mips = (instructionsExecuted / durationSeconds) / 1_000_000.0
+    // Display in a JFrame
+    val frame = JFrame("VGA Emulator")
+    frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
+    frame.contentPane = object : JPanel() {
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            g.drawImage(image, 0, 0, width * 2, height * 2, null) // scale 2x
+        }
+    }
+    frame.setSize(width * 2, height * 2)
+    frame.isVisible = true
+}
 
-    println("Executed at: %.2f MIPS".format(mips))
+
+fun main() {
+    val cpu = CPU();
+    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\nopalettetest.bin");
+    val ram = ATSysRAM(16)
+    val gpu = GenericVGAGPU()
+    val keyboard = Keyboard()
+
+    cpu.init()
+    bios.init()
+    ram.init()
+    gpu.init()
+    keyboard.init()
+
+    cpu.wireWith(bios)
+    cpu.wireWith(ram)
+    cpu.wireWith(gpu)
+    cpu.wireWith(keyboard)
+    keyboard.pushKey(Keyboard.Key(127, 0x1c))
+
+    while (!cpu.halted) {
+        cpu.tick();
+    }
+
+    showVGA(gpu)
+
+    println(cpu.halted)
+
+    println(cpu.getRAXcomponents())
 }
