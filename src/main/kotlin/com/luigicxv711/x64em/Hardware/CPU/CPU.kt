@@ -5,7 +5,9 @@ import com.luigicxv711.x64em.Hardware.GPU.GPUModes
 import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
 import com.luigicxv711.x64em.Hardware.HardwareComp
 import com.luigicxv711.x64em.Hardware.Keyboard.Keyboard
+import com.luigicxv711.x64em.Hardware.Ports.PITPort
 import com.luigicxv711.x64em.Hardware.Ports.PortManager
+import com.luigicxv711.x64em.Hardware.Ports.VGAPort
 import com.luigicxv711.x64em.Hardware.RAM.ATSysRAM
 
 enum class CPUModes {
@@ -23,14 +25,20 @@ object RFlags {
 }
 typealias Opcode = (CPU, Int, Int) -> Int
 class CPU : HardwareComp() {
-    var portManager = PortManager(this);
-    val stack = ArrayList<Long>()
+    var portManager = PortManager(this)
+    val stack = ByteArray(0x10000) // 64 BINARY kilobytes
+    var SP = 0x10000
 
-    fun push(valingo: Long) {
-        stack.add(valingo)
+    fun push(cpu: CPU, num: Int) {
+        cpu.SP = (cpu.SP - 2) and 0xFFFF
+        stack[cpu.SP] = (num and 0xFF).toByte()
+        stack[cpu.SP + 1] = (num ushr 8).toByte()
     }
-    fun pop(): Long {
-        return stack.removeAt(stack.size - 1)
+    fun pop(cpu: CPU): Int {
+        val lo = stack[cpu.SP].toInt()
+        val hi = stack[cpu.SP + 1].toInt()
+        cpu.SP = (cpu.SP + 2) and 0xFFFF
+        return lo or (hi shl 8)
     }
     // i deadass seen ppl try to replicate the stack pointer math when u could just like do an array list :skull:
 
@@ -104,6 +112,10 @@ class CPU : HardwareComp() {
                 Opcodes.DEC_CX(cpu)
             }
 
+            OpcodeDirectTable[0x6E] = {cpu, _, _ ->
+                Opcodes.OUTSB(cpu)
+            }
+
             OpcodeDirectTable[0x83] = {cpu, arg1, _ ->
                 Opcodes.Group16B_1(cpu, arg1)
             }
@@ -159,6 +171,10 @@ class CPU : HardwareComp() {
 
             OpcodeDirectTable[0xEB] = { cpu, arg1, _ ->
                 Opcodes.JMPShort(cpu, arg1)
+            }
+
+            OpcodeDirectTable[0xEE] = { cpu, _, _ ->
+                Opcodes.OUT(cpu)
             }
 
             OpcodeDirectTable[0xF3] = { cpu, _, _ ->
@@ -421,6 +437,8 @@ class CPU : HardwareComp() {
     }
 
     override fun init() {
+        portManager.registerPort(0x3C8..0x3C9, VGAPort(this))
+        portManager.registerPort(0x40..0x40, PITPort(this))
         reset()
     }
 

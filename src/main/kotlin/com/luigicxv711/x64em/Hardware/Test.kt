@@ -11,26 +11,12 @@ import java.io.File
 import javax.imageio.ImageIO
 import javax.swing.*
 
-fun loadPal(): IntArray {
-    val pal = IntArray(256)
-    var i = 0
-    val img = ImageIO.read(File("C:\\Users\\luisa\\Downloads\\stickers\\vgapal.png"))
-    for (y in 0 until img.height) {
-        for (x in 0 until img.width) {
-            val col = img.getRGB(x, y)
-            pal[i++] = col and 0xFFFFFF
-        }
-    }
-    return pal
-}
-
-
 fun showVGA(gpu: GenericVGAGPU) {
     val width = GenericVGAGPU.WIDTH
     val height = GenericVGAGPU.HEIGHT
 
     val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val palette = loadPal()
+    val palette = gpu.palette
     for (y in 0 until height) {
         for (x in 0 until width) {
             val colorIndex = gpu.frameBuffer[y * width + x].toInt() and 0xFF
@@ -42,10 +28,10 @@ fun showVGA(gpu: GenericVGAGPU) {
     frame.contentPane = object : JPanel() {
         override fun paintComponent(g: Graphics) {
             super.paintComponent(g)
-            g.drawImage(image, 0, 0, width * 2, height * 2, null) // scale 2x
+            g.drawImage(image, 0, 0, width * 4, height * 4, null) // scale 2x
         }
     }
-    frame.setSize(width * 2, height * 2)
+    frame.setSize(width * 4, height * 4)
     frame.isVisible = true
 }
 

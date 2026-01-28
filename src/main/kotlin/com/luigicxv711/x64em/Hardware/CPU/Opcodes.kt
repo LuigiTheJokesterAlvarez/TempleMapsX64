@@ -7,6 +7,7 @@ import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RBX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RCX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RDX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.SI
+import com.luigicxv711.x64em.Hardware.Ports.PITPort
 
 // ALL OF THE OPCODES IN THE X86 INSTRUCTION SET
 object Opcodes {
@@ -65,13 +66,29 @@ object Opcodes {
     fun INTERRUPT(cpu: CPU, interruptNum: Int): Int {
         val rax = cpu.registers[RAX]
         val al = (rax and AL_MASK).toInt()
-        val ah = (rax and AH_MASK).toInt()
+        val ah = ((rax and AH_MASK) ushr 8).toInt()
         val skip = when (interruptNum) {
-            10 -> {
+            // INT 0x10
+            0x0A -> {
                 cpu.setVideoMode(ah, al)
             }
-            16 -> {
+            // INT 0x16
+            0x0F -> {
                 cpu.keyboardHandle(ah, al)
+            }
+            // INT 0x86
+            0x15 -> {
+                when (ah) {
+                    0x86 -> {
+                        val cx = (cpu.registers[RCX] and AX_MASK)
+                        val dx = (cpu.registers[RDX] and AX_MASK)
+                        val microseconds = (cx shl 16) or dx
+                        val ticks = (microseconds.toDouble() / 54945.0).toUInt()
+                        val portinho = cpu.portManager.getPort(0x40) as? PITPort
+                        portinho?.waitTicks(ticks)
+                    }
+                }
+                true
             }
             else -> true
         }
@@ -197,6 +214,40 @@ object Opcodes {
         val value = cpu.read16(cpu.phys(cpu.cs, cpu.ip + 1))
         cpu.registers[SI] = (value and 0xFFFF).toLong()
         return 3
+    }
+    fun OUT(cpu: CPU): Int {
+        with (cpu) {
+            val port = (registers[RDX] and AX_MASK).toInt()
+            val al = (registers[RAX] and AL_MASK).toByte()
+
+            portManager.writePort(port, byteArrayOf(al))
+        }
+        return 1
+    }
+    fun OUTSB(cpu: CPU): Int {
+        with (cpu) {
+            val port = (registers[RDX] and AX_MASK).toInt()
+            val len = (registers[RCX] and AX_MASK).toInt()
+            val arr = ByteArray(len)
+            if (REP) {
+                var si = registers[SI]
+                for (i in 0 until len) {
+                    arr[i] = read8(phys(ds, (si + i).toInt())).toByte()
+                }
+                registers[SI] += len
+
+                registers[RCX] = (registers[RCX] and CLEAR_AX_MASK) or 0L
+            } else {
+                arr[0] = read8(phys(ds, registers[SI].toInt())).toByte()
+                registers[SI] += 1
+
+                val cx = ((registers[RCX] and AX_MASK).toInt() - 1) and 0xFFFF
+                registers[RCX] = (registers[RCX] and CLEAR_AX_MASK) or (cx.toLong() and 0xFFFFL)
+            }
+
+            portManager.writePort(port, arr)
+        }
+        return 1
     }
     fun MOVSB(cpu: CPU): Int {
         with(cpu) {
