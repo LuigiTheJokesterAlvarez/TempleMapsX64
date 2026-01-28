@@ -29,21 +29,14 @@ fun showVGA(gpu: GenericVGAGPU) {
     val width = GenericVGAGPU.WIDTH
     val height = GenericVGAGPU.HEIGHT
 
-    // Create a BufferedImage to hold the VGA pixels
     val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-
-    // Map your 8-bit VGA colors to RGB (simple palette for now)
     val palette = loadPal()
-
-    // Fill the image from framebuffer
     for (y in 0 until height) {
         for (x in 0 until width) {
             val colorIndex = gpu.frameBuffer[y * width + x].toInt() and 0xFF
             image.setRGB(x, y, palette[colorIndex])
         }
     }
-
-    // Display in a JFrame
     val frame = JFrame("VGA Emulator")
     frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
     frame.contentPane = object : JPanel() {
