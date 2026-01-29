@@ -7,6 +7,7 @@ import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RBX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RCX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RDX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.SI
+import com.luigicxv711.x64em.Hardware.HardDisk.HardDisk
 import com.luigicxv711.x64em.Hardware.Ports.PITPort
 
 // ALL OF THE OPCODES IN THE X86 INSTRUCTION SET
@@ -65,18 +66,52 @@ object Opcodes {
     }
     fun INTERRUPT(cpu: CPU, interruptNum: Int): Int {
         val rax = cpu.registers[RAX]
+        val rbx = cpu.registers[RCX]
+        val rcx = cpu.registers[RCX]
+        val rdx = cpu.registers[RDX]
         val al = (rax and AL_MASK).toInt()
         val ah = ((rax and AH_MASK) ushr 8).toInt()
+
+        val bl = (rbx and AL_MASK).toInt()
+        val bh = ((rbx and AH_MASK) ushr 8).toInt()
+
+        val cl = (rcx and AL_MASK).toInt()
+        val ch = ((rcx and AH_MASK) ushr 8).toInt()
+
+        val dl = (rdx and AL_MASK).toInt()
+        val dh = ((rdx and AH_MASK) ushr 8).toInt()
         val skip = when (interruptNum) {
             // INT 0x10
-            0x0A -> {
+            0x10 -> {
                 cpu.setVideoMode(ah, al)
             }
-            // INT 0x16
-            0x0F -> {
-                cpu.keyboardHandle(ah, al)
+            0x13 -> {
+                val disk = cpu.HardDisk
+                if (al in 1..127) {
+                    when (ah) {
+                        0x03 -> {
+                            val secs = al
+                            val sec = cl and 0x3F
+                            val cyl =
+                                (ch or ((cl and 0xC0) shl 2))
+                            val head = dh
+
+                            val arr = ByteArray(secs * 512)
+                            val bx = (rbx and AX_MASK).toInt()
+                            // get all the data out of es:bx
+                            for (i in 0..secs * 512) {
+                                val data = cpu.read8(
+                                    cpu.phys(cpu.registers[ES].toInt(), bx + i)
+                                )
+                                arr[i] = data.toByte()
+                            }
+                            val diskAddr = HardDisk.CHS2SEC(cyl, head, sec)
+                            disk.writeSectors(diskAddr, arr, secs)
+                        }
+                    }
+                }
+                true
             }
-            // INT 0x86
             0x15 -> {
                 when (ah) {
                     0x86 -> {
@@ -89,6 +124,9 @@ object Opcodes {
                     }
                 }
                 true
+            }
+            0x16 -> {
+                cpu.keyboardHandle(ah, al)
             }
             else -> true
         }
@@ -213,6 +251,7 @@ object Opcodes {
     fun MOV_SI(cpu: CPU): Int {
         val value = cpu.read16(cpu.phys(cpu.cs, cpu.ip + 1))
         cpu.registers[SI] = (value and 0xFFFF).toLong()
+        println("si ${cpu.registers[SI]}")
         return 3
     }
     fun OUT(cpu: CPU): Int {
@@ -237,6 +276,8 @@ object Opcodes {
                 registers[SI] += len
 
                 registers[RCX] = (registers[RCX] and CLEAR_AX_MASK) or 0L
+
+                REP = false
             } else {
                 arr[0] = read8(phys(ds, registers[SI].toInt())).toByte()
                 registers[SI] += 1

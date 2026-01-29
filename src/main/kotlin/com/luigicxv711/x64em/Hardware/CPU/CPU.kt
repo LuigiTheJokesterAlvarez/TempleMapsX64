@@ -3,6 +3,7 @@ package com.luigicxv711.x64em.Hardware.CPU
 import com.luigicxv711.x64em.Hardware.BIOS.BIOS
 import com.luigicxv711.x64em.Hardware.GPU.GPUModes
 import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
+import com.luigicxv711.x64em.Hardware.HardDisk.HardDisk
 import com.luigicxv711.x64em.Hardware.HardwareComp
 import com.luigicxv711.x64em.Hardware.Keyboard.Keyboard
 import com.luigicxv711.x64em.Hardware.Ports.PITPort
@@ -299,6 +300,7 @@ class CPU : HardwareComp() {
     var RAM: ATSysRAM? = null
     var GPU: GenericVGAGPU? = null
     var Keyboard: Keyboard? = null
+    var HardDisk: HardDisk? = null
 
     // interrupt functions
 
@@ -488,6 +490,9 @@ class CPU : HardwareComp() {
             }
             is Keyboard -> {
                 Keyboard = comp
+            }
+            is HardDisk -> {
+                HardDisk = comp
             }
         }
     }

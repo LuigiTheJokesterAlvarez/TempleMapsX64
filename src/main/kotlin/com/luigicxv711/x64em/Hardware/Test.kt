@@ -3,6 +3,7 @@ package com.luigicxv711.x64em.Hardware
 import com.luigicxv711.x64em.Hardware.BIOS.BIOS
 import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
 import com.luigicxv711.x64em.Hardware.CPU.CPU
+import com.luigicxv711.x64em.Hardware.HardDisk.HardDisk
 import com.luigicxv711.x64em.Hardware.Keyboard.Keyboard
 import com.luigicxv711.x64em.Hardware.RAM.ATSysRAM
 import java.awt.*
@@ -19,7 +20,11 @@ fun showVGA(gpu: GenericVGAGPU) {
     val palette = gpu.palette
     for (y in 0 until height) {
         for (x in 0 until width) {
-            val colorIndex = gpu.frameBuffer[y * width + x].toInt() and 0xFF
+            val original = gpu.frameBuffer[y * width + x].toInt()
+            var colorIndex = original and 0xFF
+            if (original == -1) {
+                colorIndex = 0
+            }
             image.setRGB(x, y, palette[colorIndex])
         }
     }
@@ -38,17 +43,20 @@ fun showVGA(gpu: GenericVGAGPU) {
 
 fun main() {
     val cpu = CPU();
-    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\nopalettetest.bin");
+    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\nopalettetesto.bin");
     val ram = ATSysRAM(16)
     val gpu = GenericVGAGPU()
     val keyboard = Keyboard()
+    val disk = HardDisk("C:\\hytaleModNatives\\disksito", 8192)
 
+    disk.init()
     cpu.init()
     bios.init()
     ram.init()
     gpu.init()
     keyboard.init()
 
+    cpu.wireWith(disk)
     cpu.wireWith(bios)
     cpu.wireWith(ram)
     cpu.wireWith(gpu)
