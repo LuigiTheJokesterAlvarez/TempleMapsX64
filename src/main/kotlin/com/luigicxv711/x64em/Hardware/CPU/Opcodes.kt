@@ -106,7 +106,7 @@ object Opcodes {
                                 arr[i] = data.toByte()
                             }
                             val diskAddr = HardDisk.CHS2SEC(cyl, head, sec)
-                            disk.writeSectors(diskAddr, arr, secs)
+                            disk?.writeSectors(diskAddr, arr, secs)
                         }
                     }
                 }
