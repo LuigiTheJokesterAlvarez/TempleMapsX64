@@ -99,7 +99,7 @@ object Opcodes {
                             val arr = ByteArray(secs * 512)
                             val bx = (rbx and AX_MASK).toInt()
                             // get all the data out of es:bx
-                            for (i in 0..secs * 512) {
+                            for (i in 0 until secs * 512) {
                                 val data = cpu.read8(
                                     cpu.phys(cpu.registers[ES].toInt(), bx + i)
                                 )
