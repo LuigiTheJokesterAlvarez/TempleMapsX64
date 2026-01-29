@@ -20,8 +20,9 @@ class HardDisk(val name: String, val size: Int) : HardwareComp() {
         while (true) {
             Thread.sleep(5000)
             val curr = System.currentTimeMillis()
-            cache.forEach { (key, _) ->
-                val last = lastaccess[key]?: return@forEach
+            val keys = cache.keys.toList()
+            for (key in keys) {
+                val last = lastaccess[key]?: continue
                 if (curr - last > 30000) {
                     deleteSector(key)
                 }
@@ -55,6 +56,7 @@ class HardDisk(val name: String, val size: Int) : HardwareComp() {
 
     fun readSector(sec: Int): ByteArray? {
         return cache.getOrPut(sec) {
+            lastaccess[sec] = System.currentTimeMillis()
             loadfromDisk(sec)
         }
     }
