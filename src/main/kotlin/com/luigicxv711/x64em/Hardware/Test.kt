@@ -43,11 +43,11 @@ fun showVGA(gpu: GenericVGAGPU) {
 
 fun main() {
     val cpu = CPU();
-    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\nopalettetesto.bin");
-    val ram = ATSysRAM(16)
+    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\test3.bin");
+    val ram = ATSysRAM(1)
     val gpu = GenericVGAGPU()
     val keyboard = Keyboard()
-    val disk = HardDisk("C:\\hytaleModNatives\\disksito", 8192)
+    val disk = HardDisk("C:\\hytaleModNatives\\disksito.epstein", 1)
 
     disk.init()
     cpu.init()
@@ -56,7 +56,7 @@ fun main() {
     gpu.init()
     keyboard.init()
 
-    cpu.wireWith(disk)
+    cpu.insertDisk(disk, 2) // hdd 1
     cpu.wireWith(bios)
     cpu.wireWith(ram)
     cpu.wireWith(gpu)
@@ -67,6 +67,7 @@ fun main() {
         cpu.tick();
     }
 
+    disk.deleteSectors(0, 48)
     showVGA(gpu)
 
     println(cpu.halted)

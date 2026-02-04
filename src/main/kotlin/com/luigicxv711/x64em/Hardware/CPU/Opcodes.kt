@@ -2,6 +2,7 @@ package com.luigicxv711.x64em.Hardware.CPU
 
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.DI
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.ES
+import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.ESPrefixOps
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RAX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RBX
 import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RCX
@@ -50,23 +51,28 @@ object Opcodes {
         return 0
     }
     fun JMPFAR16bit(cpu: CPU): Int {
-        val offLo = cpu.read8(cpu.phys(cpu.cs, (cpu.ip + 1) and 0xFFFF))
-        val offHi = cpu.read8(cpu.phys(cpu.cs, (cpu.ip + 2) and 0xFFFF))
-        val offset = offLo or (offHi shl 8)
+        val offset = cpu.read16(cpu.phys(cpu.cs, cpu.ip+1))
 
-        // read segment
-        val segLo = cpu.read8(cpu.phys(cpu.cs, (cpu.ip + 3) and 0xFFFF))
-        val segHi = cpu.read8(cpu.phys(cpu.cs, (cpu.ip + 4) and 0xFFFF))
-        val segment = segLo or (segHi shl 8)
+        val segment = cpu.read16(cpu.phys(cpu.cs, cpu.ip+3))
 
         // do the jump
         cpu.cs = segment and 0xFFFF
         cpu.ip = offset and 0xFFFF
         return 0
     }
+    // push and pop
+    fun PUSH_CS(cpu: CPU): Int {
+        cpu.push16(cpu, cpu.cs)
+        return 1
+    }
+    fun POP_ES(cpu: CPU): Int {
+        val num = cpu.pop16(cpu)
+        cpu.registers[ES] = num.toLong()
+        return 1
+    }
     fun INTERRUPT(cpu: CPU, interruptNum: Int): Int {
         val rax = cpu.registers[RAX]
-        val rbx = cpu.registers[RCX]
+        val rbx = cpu.registers[RBX]
         val rcx = cpu.registers[RCX]
         val rdx = cpu.registers[RDX]
         val al = (rax and AL_MASK).toInt()
@@ -80,24 +86,59 @@ object Opcodes {
 
         val dl = (rdx and AL_MASK).toInt()
         val dh = ((rdx and AH_MASK) ushr 8).toInt()
+
+        val bx = (rbx and AX_MASK).toInt()
         val skip = when (interruptNum) {
             // INT 0x10
             0x10 -> {
                 cpu.setVideoMode(ah, al)
             }
             0x13 -> {
-                val disk = cpu.HardDisk
+                val idx = FUNCTIONUtils.DLtoDISK(dl)
+
+                val disk: HardDisk? = idx?.let { cpu.diskPorts[it] }
                 if (al in 1..127) {
                     when (ah) {
-                        0x03 -> {
+                        0x02 -> {
+                            if (!FUNCTIONUtils.checkESBXValid(bx)) {
+                                // fuck you
+                                throw IllegalStateException(
+                                    "Holy shit Gromit, someone tried to break the emulator!"
+                                )
+                            }
                             val secs = al
                             val sec = cl and 0x3F
                             val cyl =
                                 (ch or ((cl and 0xC0) shl 2))
                             val head = dh
 
+                            val diskAddr = HardDisk.CHS2SEC(cyl, head, sec)
+                            val res = disk?.readSectors(diskAddr, secs)
+                            if (res != null) {
+                                for (i in 0 until res.size) {
+                                    val data = res[i]
+                                    // ARRAYCOPY
+                                    for (j in 0 until 512) {
+                                        cpu.write8(cpu.phys(cpu.registers[ES].toInt(), bx + i * 512 + j), data[j].toInt())
+                                    }
+                                }
+                            }
+                        }
+                        0x03 -> {
+                            if (!FUNCTIONUtils.checkESBXValid(bx)) {
+                                // fuck you
+                                throw IllegalStateException(
+                                    "Holy shit Gromit, someone tried to break the emulator!"
+                                )
+                            }
+                            val secs = al
+                            println(secs)
+                            val sec = cl and 0x3F
+                            val cyl =
+                                (ch or ((cl and 0xC0) shl 2))
+                            val head = dh
+
                             val arr = ByteArray(secs * 512)
-                            val bx = (rbx and AX_MASK).toInt()
                             // get all the data out of es:bx
                             for (i in 0 until secs * 512) {
                                 val data = cpu.read8(
@@ -220,6 +261,11 @@ object Opcodes {
         cpu.registers[RAX] = raxCleaned or (src.toLong() and AL_MASK) // optimizationingo
         return 2
     }
+    fun MOV_DL(cpu: CPU, src: Int): Int {
+        val raxCleaned = cpu.registers[RDX] and CLEAR_AL_MASK
+        cpu.registers[RDX] = raxCleaned or (src.toLong() and AL_MASK) // optimizationingo
+        return 2
+    }
     fun MOV_AH(cpu: CPU, src: Int): Int {
         val raxCleaned = cpu.registers[RAX] and CLEAR_AH_MASK
         cpu.registers[RAX] = raxCleaned or ((src.toLong() and 0xFF) shl 8)
@@ -262,6 +308,16 @@ object Opcodes {
             portManager.writePort(port, byteArrayOf(al))
         }
         return 1
+    }
+    fun ES_PREFIX_OPCODES(cpu: CPU, op: Int): Int {
+        with (cpu) {
+            val arg = read16(cpu.phys(cs, ip + 2))
+            val opfunc = ESPrefixOps[op]
+            if (opfunc != null) {
+                opfunc(this, arg)
+            }
+        }
+        return 4
     }
     fun OUTSB(cpu: CPU): Int {
         with (cpu) {
@@ -332,10 +388,12 @@ object Opcodes {
         return 2
     }
     fun JE(cpu: CPU): Int {
-        if (cpu.rflags and RFlags.ZF != 0L) {
-            return JMPFAR16bit(cpu)
+        val rel = cpu.read16(cpu.phys(cpu.cs, cpu.ip + 2)).toShort().toInt()
+        if ((cpu.rflags and RFlags.ZF) != 0L) {
+            cpu.ip = (cpu.ip + 4 + rel) and 0xFFFF
+            return 0
         }
-        return 2
+        return 4
     }
     fun JE_short(cpu: CPU, arg1: Int): Int {
         val rel = arg1.toByte().toInt()
@@ -346,7 +404,7 @@ object Opcodes {
         return 2
     }
     fun DEC_CX(cpu: CPU): Int {
-        val cx = (cpu.registers[RCX] and AX_MASK).toInt()
+        val cx = (cpu.registers[RCX] and AX_MASK).toInt() - 1
         val raxCleaned = cpu.registers[RCX] and CLEAR_AX_MASK // clear lower 16 bits
         cpu.registers[RCX] = raxCleaned or (cx.toLong() and 0xFFFFL)
         return 1
@@ -367,18 +425,13 @@ object Opcodes {
         return 2 // 2 byte oh yeah
     }
     // 0x0F group opcodes
-    fun Group0x0F_INS(cpu: CPU, numbah: Int): Int {
-        var mrmBits = cpu.modrmDecode(numbah)
-        val mod = (mrmBits ushr 16) and 0xFF
-        val reg = (mrmBits ushr 8) and 0xFF
-        val rm  = mrmBits and 0xFF
-        if (mod == 3) {
-            when (reg) {
-                // 132nd instruction here what the actual fuck
-                0x84 -> return JE(cpu)
-            }
+    fun Group0x0F_INS(cpu: CPU): Int {
+        val opcode2 = cpu.read8(cpu.phys(cpu.cs, cpu.ip + 1))
+        return when (opcode2) {
+            0x84 -> JE(cpu)   // JE near
+            //0x85 -> JNE(cpu)  // JNE near (you’ll add this)
+            else -> 2 // UNHANDLED!
         }
-        return 2
     }
     fun MOVrm8(cpu: CPU, modrmNum: Int): Int {
         val displacement = cpu.read8(cpu.phys(cpu.cs, cpu.ip + 2))
@@ -390,7 +443,7 @@ object Opcodes {
         val value = cpu.getReg(cpu, reg)
 
         if (mod == 3) {
-            cpu.setReg(cpu, reg, value)
+            cpu.setReg(cpu, rm, value)
             return 2
         }
         val addr = cpu.CalcEffAddr(mod, rm, displacement).toLong()

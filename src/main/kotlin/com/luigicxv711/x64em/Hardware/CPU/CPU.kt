@@ -20,6 +20,7 @@ object RFlags {
     const val AF = 1L shl 4;
     const val ZF = 1L shl 6;
     const val SF = 1L shl 7;
+    const val TF = 1L shl 8
     const val IF = 1L shl 9;
     const val DF = 1L shl 10;
     const val OF = 1L shl 11;
@@ -27,24 +28,31 @@ object RFlags {
 typealias Opcode = (CPU, Int, Int) -> Int
 class CPU : HardwareComp() {
     var portManager = PortManager(this)
-    val stack = ByteArray(0x10000) // 64 BINARY kilobytes
-    var SP = 0x10000
+    var ss = 0
+    var sp = 0
 
-    fun push(cpu: CPU, num: Int) {
-        cpu.SP = (cpu.SP - 2) and 0xFFFF
-        stack[cpu.SP] = (num and 0xFF).toByte()
-        stack[cpu.SP + 1] = (num ushr 8).toByte()
+    lateinit var diskPorts: Array<HardDisk?>
+
+    fun push16(cpu: CPU, num: Int) {
+        cpu.sp = (cpu.sp - 2) and 0xFFFF
+        write16(cpu.phys(cpu.ss, cpu.sp), num)
     }
-    fun pop(cpu: CPU): Int {
-        val lo = stack[cpu.SP].toInt()
-        val hi = stack[cpu.SP + 1].toInt()
-        cpu.SP = (cpu.SP + 2) and 0xFFFF
-        return lo or (hi shl 8)
+    fun pop16(cpu: CPU): Int {
+        val res = read16(cpu.phys(cpu.ss, cpu.sp))
+        cpu.sp = (cpu.sp + 2) and 0xFFFF
+        return res
     }
     // i deadass seen ppl try to replicate the stack pointer math when u could just like do an array list :skull:
 
     fun hasFlag(cpu: CPU, flag: Long): Boolean {
         return (cpu.rflags and flag).toInt() != 0
+    }
+
+    fun insertDisk(disk: HardDisk, index: Int) {
+        require(index >= 0)
+        require(index < diskPorts.size)
+
+        diskPorts[index] = disk
     }
 
     // values that are used a lot in very important instructions, so I cache them like this
@@ -71,17 +79,24 @@ class CPU : HardwareComp() {
         const val DS = 21
         // bro why is the order swapped in x86
         val OpcodeDirectTable: Array<((CPU, Int, Int) -> Int)?> = Array(256) { null } // pre-init
+        val ESPrefixOps: Array<((CPU, Int) -> Unit)?> = Array(256) { null }
 
         // load ALL opcodes
         init {
             OpcodeDirectTable[0x04] = { cpu, arg1, _ ->
                 Opcodes.ADD_AL_imm8(cpu, arg1)
             } //  ADD AL, num
-            OpcodeDirectTable[0x0C] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x07] = { cpu, _, _ ->
+                Opcodes.POP_ES(cpu)
+            }
+            OpcodeDirectTable[0x0C] = { cpu, arg1, _ ->
                 Opcodes.OR_AL(cpu, arg1)
             }
-            OpcodeDirectTable[0x0F] = { cpu, arg1, _ ->
-                Opcodes.Group0x0F_INS(cpu, arg1)
+            OpcodeDirectTable[0x0E] = { cpu, _, _ ->
+                Opcodes.PUSH_CS(cpu)
+            }
+            OpcodeDirectTable[0x0F] = { cpu, _, _ ->
+                Opcodes.Group0x0F_INS(cpu)
             } //  ADD AL, num
 
             OpcodeDirectTable[0x74] = { cpu, num, _ ->
@@ -92,37 +107,41 @@ class CPU : HardwareComp() {
                 Opcodes.MOVrm8(cpu, modrmnum)
             }
 
-            OpcodeDirectTable[0x24] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x24] = { cpu, arg1, _ ->
                 Opcodes.AND_AL(cpu, arg1)
             }
 
-            OpcodeDirectTable[0x2C] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x26] = { cpu, arg1, _ ->
+                Opcodes.ES_PREFIX_OPCODES(cpu, arg1)
+            }
+
+            OpcodeDirectTable[0x2C] = { cpu, arg1, _ ->
                 Opcodes.SUB_AL_imm8(cpu, arg1)
             }
 
 
-            OpcodeDirectTable[0x34] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x34] = { cpu, arg1, _ ->
                 Opcodes.XOR_AL(cpu, arg1)
             }
 
-            OpcodeDirectTable[0x3C] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x3C] = { cpu, arg1, _ ->
                 Opcodes.CMP_AL(cpu, arg1)
             }
 
-            OpcodeDirectTable[0x49] = {cpu, _, _ ->
+            OpcodeDirectTable[0x49] = { cpu, _, _ ->
                 Opcodes.DEC_CX(cpu)
             }
 
-            OpcodeDirectTable[0x6E] = {cpu, _, _ ->
+            OpcodeDirectTable[0x6E] = { cpu, _, _ ->
                 Opcodes.OUTSB(cpu)
             }
 
-            OpcodeDirectTable[0x83] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x83] = { cpu, arg1, _ ->
                 Opcodes.Group16B_1(cpu, arg1)
             }
 
 
-            OpcodeDirectTable[0x8E] = {cpu, arg1, _ ->
+            OpcodeDirectTable[0x8E] = { cpu, arg1, _ ->
                 Opcodes.MOV_reg2seg(cpu, arg1)
             }
 
@@ -136,6 +155,9 @@ class CPU : HardwareComp() {
 
             OpcodeDirectTable[0xB0] = { cpu, src, _ ->
                 Opcodes.MOV_AL(cpu, src)
+            }
+            OpcodeDirectTable[0xB2] = { cpu, src, _ ->
+                Opcodes.MOV_DL(cpu, src)
             }
             OpcodeDirectTable[0xB4] = { cpu, src, _ ->
                 Opcodes.MOV_AH(cpu, src)
@@ -193,6 +215,9 @@ class CPU : HardwareComp() {
             OpcodeDirectTable[0xFE] = { cpu, num, _ ->
                 Opcodes.Group4_INS(cpu, num)
             }
+
+            // ES OPCODES
+            ESPrefixOps[0xA0] = ES_Opcodes::MOV_AL
         }
     }
 
@@ -441,6 +466,8 @@ class CPU : HardwareComp() {
     override fun init() {
         portManager.registerPort(0x3C8..0x3C9, VGAPort(this))
         portManager.registerPort(0x40..0x40, PITPort(this))
+
+        diskPorts = arrayOfNulls(18) // first two are for floppies
         reset()
     }
 
@@ -537,6 +564,12 @@ class CPU : HardwareComp() {
         RAM?.let { ram ->
             ram.write8(address, value)
         }
+    }
+
+    fun write16(address: Long, value: Int) {
+        val vall = value and 0xFFFF
+        write8(address, vall and 0xFF)
+        write8(address+1, vall ushr 8)
     }
 
     fun ArrCPY(cpu: CPU, length: Int) {

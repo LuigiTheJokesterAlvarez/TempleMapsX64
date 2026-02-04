@@ -14,18 +14,23 @@ class VGAPort(private val cpu: CPU) : Port(cpu) {
                 palIndex = data[0].toInt() and 0xFF
             }
             0x3C9 -> {
-                val colors = IntArray(256)
-                if (data.size != 768) return
-                for (i in palIndex until data.size / 3) {
-                    var r = data[i*3].toInt() and 0xFF
-                    var g = data[i*3+1].toInt() and 0xFF
-                    var b = data[i*3+2].toInt() and 0xFF
-                    r *= brightnessFactor
-                    g *= brightnessFactor
-                    b *= brightnessFactor
+                val colors = gpu.palette
 
-                    colors[i] = (r shl 16) or (g shl 8) or b
+                var i = 0
+                while (i + 2 < data.size) { // ensures we have a full rgb triplet
+                    val idx = palIndex
+                    if (idx >= 256) break
+
+                    val r = (data[i].toInt() and 0xFF * brightnessFactor).coerceIn(0, 255)
+                    val g = (data[i + 1].toInt() and 0xFF * brightnessFactor).coerceIn(0, 255)
+                    val b = (data[i + 2].toInt() and 0xFF * brightnessFactor).coerceIn(0, 255)
+
+                    colors[idx] = (r shl 16) or (g shl 8) or b
+
+                    palIndex = (palIndex + 1) and 0xFF
+                    i += 3
                 }
+
                 gpu.palette = colors
             }
         }
