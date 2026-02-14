@@ -3,18 +3,17 @@ package com.luigicxv711.x64em.Hardware
 import com.luigicxv711.x64em.Hardware.BIOS.BIOS
 import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
 import com.luigicxv711.x64em.Hardware.CPU.CPU
+import com.luigicxv711.x64em.Hardware.CPU.FUNCTIONUtils
 import com.luigicxv711.x64em.Hardware.HardDisk.HardDisk
 import com.luigicxv711.x64em.Hardware.Keyboard.Keyboard
 import com.luigicxv711.x64em.Hardware.RAM.ATSysRAM
 import java.awt.*
 import java.awt.image.BufferedImage
-import java.io.File
-import javax.imageio.ImageIO
 import javax.swing.*
 
 fun showVGA(gpu: GenericVGAGPU) {
-    val width = GenericVGAGPU.WIDTH
-    val height = GenericVGAGPU.HEIGHT
+    val width = gpu.width
+    val height = gpu.height
 
     val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
     val palette = gpu.palette
@@ -33,44 +32,25 @@ fun showVGA(gpu: GenericVGAGPU) {
     frame.contentPane = object : JPanel() {
         override fun paintComponent(g: Graphics) {
             super.paintComponent(g)
-            g.drawImage(image, 0, 0, width * 4, height * 4, null) // scale 2x
+            g.drawImage(image, 0, 0, width * 2, height * 2, null) // scale 2x
         }
     }
-    frame.setSize(width * 4, height * 4)
+    frame.setSize(width * 2, height * 2)
     frame.isVisible = true
 }
 
 
 fun main() {
-    val cpu = CPU();
-    val bios = BIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\test3.bin");
-    val ram = ATSysRAM(1)
-    val gpu = GenericVGAGPU()
-    val keyboard = Keyboard()
-    val disk = HardDisk("C:\\hytaleModNatives\\disksito.epstein", 1)
+    val em = X64Em(GenericVGAGPU(), Keyboard(), 32)
 
-    disk.init()
-    cpu.init()
-    bios.init()
-    ram.init()
-    gpu.init()
-    keyboard.init()
+    em.loadBIOS("C:\\Users\\luisa\\Downloads\\nasm-3.01rc9-win64\\luigibios\\BIOSfull.bin")
 
-    cpu.insertDisk(disk, 2) // hdd 1
-    cpu.wireWith(bios)
-    cpu.wireWith(ram)
-    cpu.wireWith(gpu)
-    cpu.wireWith(keyboard)
-    keyboard.pushKey(Keyboard.Key(127, 0x1c))
+    em.init()
 
-    while (!cpu.halted) {
-        cpu.tick();
-    }
+    while (em.running) {}
 
-    disk.deleteSectors(0, 48)
-    showVGA(gpu)
+    em.gpu.draw()
 
-    println(cpu.halted)
 
-    println(cpu.getRAXcomponents())
+    showVGA(em.gpu)
 }

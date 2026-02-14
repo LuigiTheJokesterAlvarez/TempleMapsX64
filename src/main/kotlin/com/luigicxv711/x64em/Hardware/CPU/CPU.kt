@@ -1,6 +1,7 @@
 package com.luigicxv711.x64em.Hardware.CPU
 
 import com.luigicxv711.x64em.Hardware.BIOS.BIOS
+import com.luigicxv711.x64em.Hardware.CPU.CPU.Indexes.RAX
 import com.luigicxv711.x64em.Hardware.GPU.GPUModes
 import com.luigicxv711.x64em.Hardware.GPU.GenericVGAGPU
 import com.luigicxv711.x64em.Hardware.HardDisk.HardDisk
@@ -14,6 +15,23 @@ import com.luigicxv711.x64em.Hardware.RAM.ATSysRAM
 enum class CPUModes {
     REAL, PROTECTED, LONG
 }
+object SegmentFlags {
+    const val GRANULARITY_4K = 1 shl 0   // G
+    const val DEFAULT_32    = 1 shl 1   // D/B
+    const val LONG_MODE     = 1 shl 2   // L (ignore for now)
+    const val AVAILABLE     = 1 shl 3   // AVL
+}
+data class SegDescriptor(
+    val base: Int,
+    val limit: Int,
+    val access: Int,
+    val flags: Int,
+)
+val SegDescriptor.default32 get() = flags and SegmentFlags.DEFAULT_32 != 0
+val SegDescriptor.granularity get() = flags and SegmentFlags.GRANULARITY_4K != 0
+val SegDescriptor.isCode get() = access and 0x08 != 0
+val SegDescriptor.expandDown get() = !isCode && (access and 0x04 != 0)
+val SegDescriptor.present get() = access and 0x80 != 0
 object RFlags {
     const val CF = 1L shl 0;
     const val PF = 1L shl 2;
@@ -27,6 +45,142 @@ object RFlags {
 }
 typealias Opcode = (CPU, Int, Int) -> Int
 class CPU : HardwareComp() {
+    var physFn: (Int, Int) -> Long = ::physReal
+
+    fun reg8(reg: Long, high: Boolean = false) = if (high) ((reg and AH_MASK) ushr 8).toInt() else (reg and AL_MASK).toInt()
+
+
+    fun writeFlag(flag: Long, cond: Boolean) {
+        rflags = if (cond) rflags or flag else rflags and flag.inv()
+    }
+
+    fun clearFlag(flag: Long) {
+        rflags = rflags and flag.inv()
+    }
+
+    fun raiseInterrupt(num: Int) {
+        halted = false
+
+        // Push FLAGS
+        push16(this, rflags.toInt())
+
+        // Clear IF and TF
+        clearFlag(RFlags.IF)
+        clearFlag(RFlags.TF)
+
+        // Push CS and IP
+        push16(this, cs)
+        push16(this, ip)
+
+        // Load vector from IVT (real mode)
+        val vecAddr = (num * 4).toLong()
+        ip = read16(vecAddr)
+        cs = read16(vecAddr + 2)
+    }
+
+    fun decodeDescriptor(raw: ByteArray): SegDescriptor {
+        val base =
+            (raw[2].toInt() and 0xFF) or
+                    ((raw[3].toInt() and 0xFF) shl 8) or
+                    ((raw[4].toInt() and 0xFF) shl 16) or
+                    ((raw[7].toInt() and 0xFF) shl 24)
+
+        var limit =
+            (raw[0].toInt() and 0xFF) or
+                    ((raw[1].toInt() and 0xFF) shl 8) or
+                    ((raw[6].toInt() and 0x0F) shl 16)
+
+        val access = raw[5].toInt() and 0xFF
+        val flags = (raw[6].toInt() shr 4) and 0x0F
+
+        return SegDescriptor(base, limit, access, flags)
+    }
+
+    fun getDescriptor(selector: Int): SegDescriptor {
+        val sel = selector and 0xFFFC
+        val index = sel ushr 3
+
+        require(index != 0) { "GP fault: null selector" }
+
+        val isLdt = ((sel ushr 2) and 1) == 1
+        val tableBase: Int
+        val tableLimit: Int
+
+        if (isLdt) {
+            require(ldtLimit != 0) { "GP fault: LDT not loaded" }
+            tableBase = ldtBase
+            tableLimit = ldtLimit
+        } else {
+            tableBase = gdtBase
+            tableLimit = gdtLimit
+        }
+
+        val offset = index * 8
+        require(offset + 7 <= tableLimit) { "GP fault: selector out of bounds" }
+
+        val addr = tableBase + offset
+        val raw = ByteArray(8) {
+            read8((addr + it).toLong()).toByte()
+        }
+
+        return decodeDescriptor(raw)
+    }
+
+    fun physProtected(seg: Int, offset: Int): Long {
+        val desc = getDescriptor(seg)
+        require(desc.present) { "NP fault: segment not present" }
+
+        val off =
+            if (desc.default32)
+                offset.toLong() and 0xFFFFFFFFL
+            else
+                offset.toLong() and 0xFFFF
+
+        val limit =
+            if (desc.granularity)
+                (desc.limit.toLong() shl 12) or 0xFFFL
+            else
+                desc.limit.toLong()
+
+        if (!desc.expandDown) {
+            require(off <= limit) {
+                "GP fault: offset $off > limit $limit"
+            }
+        } else {
+            val max =
+                if (desc.default32) 0xFFFFFFFFL else 0xFFFFL
+            require(off > limit && off <= max) {
+                "GP fault: expand-down offset $off invalid"
+            }
+        }
+
+        return (desc.base.toLong() + off) and 0xFFFFFFFFL
+    }
+
+    fun physReal(cs: Int, ip: Int): Long {
+        return ((cs shl 4) + (ip and 0xFFFF)).toLong() and 0xFFFFF
+    } // this is CRUCIAL for Real Mode.
+
+    fun setCPUMode(newMode: CPUModes) {
+        mode = newMode
+        physFn = when (newMode) {
+            CPUModes.REAL -> ::physReal
+            CPUModes.PROTECTED -> ::physProtected
+            CPUModes.LONG -> ::physReal
+        }
+    }
+
+
+    fun phys(cs: Int, ip: Int): Long =
+        physFn(cs, ip)
+
+    var gdtBase: Int = 0x00000000
+    var gdtLimit: Int = 0x0000000
+
+    var ldtBase: Int = 0x00000000
+    var ldtLimit: Int = 0x0000000
+
+
     var portManager = PortManager(this)
     var ss = 0
     var sp = 0
@@ -76,7 +230,7 @@ class CPU : HardwareComp() {
         const val DI = 19
 
         const val SI = 20
-        const val DS = 21
+        const val BP = 21
         // bro why is the order swapped in x86
         val OpcodeDirectTable: Array<((CPU, Int, Int) -> Int)?> = Array(256) { null } // pre-init
         val ESPrefixOps: Array<((CPU, Int) -> Unit)?> = Array(256) { null }
@@ -119,6 +273,9 @@ class CPU : HardwareComp() {
                 Opcodes.SUB_AL_imm8(cpu, arg1)
             }
 
+            OpcodeDirectTable[0x30] = { cpu, arg1, _ ->
+                Opcodes.XOR_rm8_8(cpu, arg1)
+            }
 
             OpcodeDirectTable[0x34] = { cpu, arg1, _ ->
                 Opcodes.XOR_AL(cpu, arg1)
@@ -153,11 +310,18 @@ class CPU : HardwareComp() {
                 Opcodes.STOSB(cpu)
             }
 
+            OpcodeDirectTable[0xAB] = { cpu, _, _ ->
+                Opcodes.STOSW(cpu)
+            }
+
             OpcodeDirectTable[0xB0] = { cpu, src, _ ->
                 Opcodes.MOV_AL(cpu, src)
             }
             OpcodeDirectTable[0xB2] = { cpu, src, _ ->
                 Opcodes.MOV_DL(cpu, src)
+            }
+            OpcodeDirectTable[0xB3] = { cpu, src, _ ->
+                Opcodes.MOV_BL(cpu, src)
             }
             OpcodeDirectTable[0xB4] = { cpu, src, _ ->
                 Opcodes.MOV_AH(cpu, src)
@@ -211,6 +375,9 @@ class CPU : HardwareComp() {
             }
             OpcodeDirectTable[0xFA] = { cpu, _, _ ->
                 Opcodes.CLI(cpu)
+            }
+            OpcodeDirectTable[0xFC] = { cpu, _, _ ->
+                Opcodes.CLD(cpu)
             }
             OpcodeDirectTable[0xFE] = { cpu, num, _ ->
                 Opcodes.Group4_INS(cpu, num)
@@ -329,17 +496,50 @@ class CPU : HardwareComp() {
 
     // interrupt functions
 
-    fun setVideoMode(ftype: Int, value: Int): Boolean {
+    fun INT10h(ftype: Int, value: Int): Boolean {
         when (ftype) {
             0x00 -> {
                 GPU?.let { gpu ->
-                    gpu.mode = when (value) {
+                    val mode = when (value) {
                         0x13 -> GPUModes.Standard13h
                         0x12 -> GPUModes.Standard12h
+                        0x03 -> GPUModes.TextMode
                         else -> GPUModes.Standard13h
                     }
+                    gpu.switchMode(mode)
                 }
             } // set video mode
+            0x0E -> {
+                GPU?.let { gpu ->
+                    with (gpu) {
+                        when (mode) {
+                            GPUModes.TextMode -> {
+                                teletyping = true
+                                val offset = (cursorY * 80 + cursorX) * 2
+                                write8(GenericVGAGPU.VGA_TEXT_BASE + offset, value)
+                                write8(GenericVGAGPU.VGA_TEXT_BASE + offset + 1, 0x0F)      // white on black
+                                teletyping = false
+
+                                cursorX++
+                                if (cursorX == 80) {
+                                    cursorX = 0
+                                    cursorY++
+                                    if (cursorY == 25) {
+                                        scrollText()
+                                        cursorY--
+                                    }
+                                }
+                            }
+                            GPUModes.Standard13h -> {
+
+                            }
+                            GPUModes.Standard12h -> {
+
+                            }
+                        }
+                    }
+                }
+            }
         }
         return true
     }
@@ -360,41 +560,33 @@ class CPU : HardwareComp() {
         return false
     }
 
-    fun phys(cs: Int, ip: Int): Long {
-        return ((cs shl 4) + (ip and 0xFFFF)).toLong() and 0xFFFFF
-    } // this is CRUCIAL for Real Mode.
+    fun updateFlags(res: Int, inc: Boolean, old: Int, bits: Int) {
+        val mask = (1 shl bits) - 1
+        val signBit = 1 shl (bits - 1)
 
-    fun updateFlags(res: Int, inc: Boolean, old: Int) {
+        val r = res and mask
+        val o = old and mask
         var newFlags = 0L
 
-        if ((res and 0xFF) == 0) newFlags = newFlags or RFlags.ZF
+        // ZF
+        if (r == 0) newFlags = newFlags or RFlags.ZF
 
-        if ((res and 0x80) != 0) newFlags = newFlags or RFlags.SF
+        // SF
+        if ((r and signBit) != 0) newFlags = newFlags or RFlags.SF
 
-        newFlags = newFlags or parityLookup[res and 0xFF]
+        // PF (always low 8 bits!)
+        newFlags = newFlags or parityLookup[r and 0xFF]
 
+        // AF
+        if (((o xor r) and 0x10) != 0) newFlags = newFlags or RFlags.AF
+
+        // OF
         if (inc) {
-            if (old == 0x7F && res == 0x80) newFlags = newFlags or RFlags.OF
+            if (o == signBit - 1 && r == signBit)
+                newFlags = newFlags or RFlags.OF
         } else {
-            if (old == 0x80 && res == 0x7F) newFlags = newFlags or RFlags.OF
-        }
-
-        rflags = (rflags and maskAffected.inv()) or (newFlags and maskAffected)
-    }
-
-    fun updateFlags16(res: Int, inc: Boolean, old: Int) {
-        var newFlags = 0L
-
-        if ((res and 0xFFFF) == 0) newFlags = newFlags or RFlags.ZF
-
-        if ((res and 0x8000) != 0) newFlags = newFlags or RFlags.SF
-
-        newFlags = newFlags or parityLookup[res and 0xFF]
-
-        if (inc) {
-            if (old == 0x7FFF && res == 0x8000) newFlags = newFlags or RFlags.OF
-        } else {
-            if (old == 0x8000 && res == 0x7FFF) newFlags = newFlags or RFlags.OF
+            if (o == signBit && r == signBit - 1)
+                newFlags = newFlags or RFlags.OF
         }
 
         rflags = (rflags and maskAffected.inv()) or (newFlags and maskAffected)
@@ -408,7 +600,7 @@ class CPU : HardwareComp() {
             val res = (value + 1) and 0xFF
 
             registers[rm] = (reg and -0x100L) or res.toLong()
-            updateFlags(res, true, value)
+            updateFlags(res, true, value, 8)
         } else {
             // [a to d]h
             val idx = rm - 4
@@ -417,7 +609,7 @@ class CPU : HardwareComp() {
             val res = (value + 1) and 0xFF
 
             registers[idx] = (reg and -0xFF01L) or (res.toLong() shl 8)
-            updateFlags(res, false, value)
+            updateFlags(res, false, value, 8)
         }
     }
 
@@ -464,7 +656,7 @@ class CPU : HardwareComp() {
     }
 
     override fun init() {
-        portManager.registerPort(0x3C8..0x3C9, VGAPort(this))
+        portManager.registerPort(0x3C0..0x3CF, VGAPort(this))
         portManager.registerPort(0x40..0x40, PITPort(this))
 
         diskPorts = arrayOfNulls(18) // first two are for floppies
@@ -532,9 +724,25 @@ class CPU : HardwareComp() {
             }
         }  // this is fun
 
-        RAM?.let { ram ->
-            return ram.read8(address)
+        GPU?.let { gpu ->
+            val size = gpu.modeSize
+            when (gpu.mode) {
+                GPUModes.Standard13h, GPUModes.Standard12h -> {
+                    val vga_b = GenericVGAGPU.VGA_BASE
+                    if (address in vga_b until vga_b + size) {
+                        return gpu.read8(address)
+                    }
+                }
+                GPUModes.TextMode -> {
+                    val vga_text = GenericVGAGPU.VGA_TEXT_BASE
+                    if (address in vga_text until vga_text + size) {
+                        return gpu.read8(address)
+                    }
+                }
+            }
         }
+
+        RAM?.read8(address)
 
         return 0xFF
     }
@@ -552,18 +760,26 @@ class CPU : HardwareComp() {
         }
 
         GPU?.let { gpu ->
-            val frameBufferLen = gpu.frameBuffer.size
-            val vga_b = GenericVGAGPU.ImportantVals.VGA_BASE
-            val size = GenericVGAGPU.ImportantVals.SIZE
-            if (address in vga_b until vga_b + size) {
-                gpu.write8(address, value)
-                return
+            val size = gpu.modeSize
+            when (gpu.mode) {
+                GPUModes.Standard13h, GPUModes.Standard12h -> {
+                    val vga_b = GenericVGAGPU.VGA_BASE
+                    if (address in vga_b until vga_b + size) {
+                        gpu.write8(address, value)
+                        return
+                    }
+                }
+                GPUModes.TextMode -> {
+                    val vga_text = GenericVGAGPU.VGA_TEXT_BASE
+                    if (address in vga_text until vga_text + size) {
+                        gpu.write8(address, value)
+                        return
+                    }
+                }
             }
         }
 
-        RAM?.let { ram ->
-            ram.write8(address, value)
-        }
+        RAM?.write8(address, value)
     }
 
     fun write16(address: Long, value: Int) {

@@ -3,13 +3,12 @@ package com.luigicxv711.x64em.Hardware.HardDisk
 import com.luigicxv711.x64em.Hardware.HardwareComp
 import java.io.File
 import java.io.RandomAccessFile
-import java.nio.ByteBuffer
 import java.util.Collections
 
 // SIZE IN MB
-class HardDisk(val path: String, val size: Int) : HardwareComp() {
-    val maxSectors = size * 2048
-    companion object {
+class HardDisk(val path: String, val size: Double) : HardwareComp() {
+    val maxSectors = (size * 2048).toInt()
+    companion object  {
         const val SECTOR_SIZE = 512
         const val SECTORS_PER_HEAD = 63
         const val HEADS_PER_CYLINDER = 16
@@ -61,12 +60,15 @@ class HardDisk(val path: String, val size: Int) : HardwareComp() {
                 supposedSize
             )
         } else {
-            if (diskfile.length() != supposedSize) {
+            chan = RandomAccessFile(diskfile, "rw")
+
+            if (diskfile.length() < supposedSize) {
+                chan.setLength(supposedSize)
+            } else if (diskfile.length() > supposedSize) {
                 throw IllegalStateException(
-                    "disk image size mismatch: expected $supposedSize bytes, got ${diskfile.length()}"
+                    "disk image too large: expected $supposedSize bytes, got ${diskfile.length()}"
                 )
             }
-            chan = RandomAccessFile(diskfile, "rw")
         }
 
         bgThr.isDaemon = true
