@@ -51,18 +51,19 @@ class TempleMapsPlugin(init: JavaPluginInit) : TalePlugin(init) {
 
     override fun onStart() {
         taleCommands.register(TempleCommand())
+        taleCommands.register(X64EMCommand())
 
         info("TempleMaps ready!")
         info("Place disk images (.img/.iso) in: mods/SSquadTeam_TempleMaps/")
         info("Use /temple list to see images, /temple start <image> to boot")
     }
 
-    fun addPlayer(player: Player) {
+    fun addPlayer(player: Player, displayId: String = TempleCommand.DISPLAY_ID) {
         val playerRef = player.playerRef ?: return
         val world = player.world ?: return
 
         playingPlayers.add(playerRef.name)
-        MapDisplayManager.addViewer(TempleCommand.DISPLAY_ID, player)
+        MapDisplayManager.addViewer(displayId, player)
 
         world.execute {
             val position = playerRef.transform.position
